@@ -25,7 +25,7 @@ class AccessPoint:
     def reset(self):
         self.channel_busy = False
 
-class DCAenv:
+class DCAEnv:
     RENDER_SLOTS = 50
     NOTEBOOK = 'ipykernel' in sys.modules
 
@@ -145,7 +145,7 @@ class DCAenv:
 if __name__ == "__main__":
     num_nodes = 5
     time_slots = 500
-    env = DCAenv(num_nodes=num_nodes, time_slots=time_slots, render_mode='rgb_array')
+    env = DCAEnv(num_nodes=num_nodes, time_slots=time_slots, render_mode='rgb_array')
     agents = [CSMA_CA_Agent(i, cw_min=2, cw_max=16) for i in range(num_nodes)]
 
     state, _ = env.reset()
