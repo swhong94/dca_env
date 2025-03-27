@@ -1,4 +1,18 @@
 
+# ignore cache files and ipynb files 
 *.ipynb 
 __pycache__ 
+
+# ignore proto versions
 DCAenv_proto.py
+
+# ignore shell scripts
+test_proto.sh
+
+# ignore images / videos / etc
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
