@@ -1,5 +1,7 @@
 # DCA Environment
 
+> Gym Environment is on progress
+
 A Distributed Channel Access (DCA) environment implemented with OpenAI Gym-like interface for Reinforcement Learning (RL) and Multi-Agent RL experiments. The environment simulates multiple nodes competing for channel access using CSMA/CA protocol.
 
 ## Features
