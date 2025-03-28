@@ -29,7 +29,12 @@ class AccessPoint:
     def reset(self):
         self.channel_busy = False
 
-class DCAEnv(Env):
+
+
+class DecentralizedChannelAcessEnv(Env):
+    """ 
+    Decentralized channel access (DCA) formulated into decentralized POMDP
+    """
     metadata = {"render_modes": ["human", "rgb_array", "ansi"], "render_fps": 10} 
     RENDER_SLOTS = 50
     NOTEBOOK = 'ipykernel' in sys.modules
@@ -39,17 +44,17 @@ class DCAEnv(Env):
         "COLLISION": 2
     }
 
-    def __init__(self, num_nodes=5, max_steps=1000, render_mode=None):
+    def __init__(self, num_agents=5, max_steps=1000, render_mode=None):
         super().__init__() 
 
-        self.num_nodes = num_nodes
+        self.num_agents = num_agents
         self.max_steps = max_steps
         self.render_mode = render_mode.lower() if render_mode else None
         self.access_point = AccessPoint()
         self.t = 0
 
         # Define action and observation spaces
-        self.action_space = gym.spaces.MultiBinary(num_nodes)
+        self.action_space = gym.spaces.MultiBinary(num_agents)
         
 
         # Observation space only includes channel state and collision info
@@ -60,11 +65,8 @@ class DCAEnv(Env):
 
         # Hidden state (not directly observable) 
         self.hidden_state = {
-            "channel": "IDLE",      # Channel State
-            "ready_nodes": [],      # Ready Nodes
-            "D2LT": [],             # Number of timeslots to last successful transmission
-            "actions": [],          # Agent Actions 
-            "others": [],           # Indicator of other nodes transmission (0: no transmission, 1: transmission)
+            "channel": "IDLE",
+            "ready_nodes": [] 
         }
 
         self._initialize_render_data()
@@ -77,13 +79,8 @@ class DCAEnv(Env):
         
         self.t = 0
         self.access_point.reset()
-        self.d2lt = np.zeros(self.num_nodes) 
-        self.others = np.zeros(self.num_nodes) 
-        self.hidden_state = {"channel": "IDLE", 
-                             "ready_nodes": [], 
-                             "D2LT": self.d2lt, 
-                             "actions": [0] * self.num_nodes, 
-                             "others": self.others}
+
+        self.hidden_state = {"channel": "IDLE", "ready_nodes": []}
         self._initialize_render_data()
 
         # Get initial state and info 
@@ -96,19 +93,13 @@ class DCAEnv(Env):
     def step(self, actions):
         ready_nodes = np.where(actions == 1)[0].tolist()
         channel = self.access_point.receive(ready_nodes)
-        self.d2lt = self.d2lt + 1   
-        self.others = np.zeros(self.num_nodes)
-
+        self.hidden_state = {
+            "channel": channel,
+            "ready_nodes": ready_nodes
+        } 
         
         # Compute reward 
         reward = self._compute_reward(channel, ready_nodes)
-        self.hidden_state = {
-            "channel": channel,
-            "ready_nodes": ready_nodes,
-            "D2LT": self.d2lt, 
-            "actions": actions,
-            "others": self.others,
-        } 
 
         # Get observation 
         observation = self._get_obs() 
@@ -122,7 +113,7 @@ class DCAEnv(Env):
         }
 
         # Update render data
-        self.state_data = np.zeros((self.num_nodes, 1))
+        self.state_data = np.zeros((self.num_agents, 1))
         if channel == 'ACK':
             self.state_data[ready_nodes[0]] = 1
         elif channel == 'COLLISION':
@@ -144,29 +135,22 @@ class DCAEnv(Env):
     def _get_obs(self, ): 
         channel = self.hidden_state["channel"]
         channel_state = self.CHANNEL_STATE_MAP[channel]
-
-        # D2LT (Number of time slots from last successful transmission)
-
         collision = 1 if channel == "COLLISION" else 0 
         return {"channel_state": channel_state, "collision": collision} 
     
 
     def _compute_reward(self, channel, ready_nodes):
         self.render_data['time_slot'] += 1
-        self.others = np.ones(self.num_nodes)
+        
         if channel == 'ACK':
             self.render_data['success'] += 1
             self.render_data['node_success'][ready_nodes[0]] += 1
-            self.d2lt[ready_nodes[0]] = 0
-            self.others[ready_nodes[0]] = 0
             return 1.0
         elif channel == 'COLLISION':
             self.render_data['collision'] += 1
             for node in ready_nodes:
                 self.render_data['node_collision'][node] += 1
             return -1.0
-        else: 
-            self.others = np.zeros(self.num_nodes)
         return 0.0
 
 
@@ -181,7 +165,7 @@ class DCAEnv(Env):
                 display.clear_output(wait=True)
             print("*" * 30 + f"{'RENDERING DCA(t = ' + str(self.t) + ')':^40}" + "*" * 30)
             for i, row in enumerate(time_node_data):
-                print(f"Node {i+1} (D2LT={self.d2lt[i]:>4.1f}): ", end=' ')
+                print(f"Node {i+1}: ", end=' ')
                 for rc in row:
                     CCOLOR = '\033[44m' if rc == 1 else '\033[101m' if rc == 2 else '\33[7m'
                     CEND = '\33[0m'
@@ -191,7 +175,7 @@ class DCAEnv(Env):
                   f"Success: {self.render_data['success']} ({self.render_data['node_success'].squeeze()}), "
                   f"Collision: {self.render_data['collision']}, "
                   f"Throughput: {self.render_data['success'] / self.t if self.t > 0 else 0:.3f}")
-            time.sleep(0.1)
+            time.sleep(0.01)
 
         elif self.render_mode == "rgb_array" or self.render_mode == "human":
             plt.clf()
@@ -210,7 +194,7 @@ class DCAEnv(Env):
             plt.grid(True)
 
             plt.subplot(224)
-            plt.bar(range(self.num_nodes), self.render_data['node_success'].squeeze())
+            plt.bar(range(self.num_agents), self.render_data['node_success'].squeeze())
             
             plt.ylabel('Success Count')
 
@@ -223,17 +207,15 @@ class DCAEnv(Env):
 
     def _initialize_render_data(self):
         self.render_data = {
-            'time_node': np.zeros((self.num_nodes, self.RENDER_SLOTS)),
-            'node_success': np.zeros((self.num_nodes, 1), dtype=int),
-            'node_collision': np.zeros((self.num_nodes, 1), dtype=int),
+            'time_node': np.zeros((self.num_agents, self.RENDER_SLOTS)),
+            'node_success': np.zeros((self.num_agents, 1), dtype=int),
+            'node_collision': np.zeros((self.num_agents, 1), dtype=int),
             'time_slot': 0,
             'success': 0,
             'collision': 0,
             'cumsum_success': [],
             'cumsum_collision': []
         }
-
-
 
 
 
@@ -250,14 +232,16 @@ class CSMA_gym(CSMA_CA_Agent):
         action = super().act(observation) 
         return action[0]
 
+
+
 if __name__ == "__main__":
-    num_nodes = 5
+    num_agents = 5
     max_steps = 1000
-    env1 = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, render_mode='ansi')
-    # env2 = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, render_mode='human')
-    # env3 = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, render_mode='human')
-    agents = [CSMA_gym(i, cw_min=2, cw_max=16) for i in range(num_nodes)]
-    # rotate_initial = np.array([1, 0, 0, 0, 0])
+    env1 = DecentralizedChannelAcessEnv(num_agents=num_agents, max_steps=max_steps, render_mode='human')
+    # env2 = DCAEnv(num_agents=num_agents, max_steps=max_steps, render_mode='human')
+    # env3 = DCAEnv(num_agents=num_agents, max_steps=max_steps, render_mode='human')
+    agents = [CSMA_gym(i, cw_min=2, cw_max=16) for i in range(num_agents)]
+    rotate_initial = np.array([1, 0, 0, 0, 0])
 
 
     observation, _ = env1.reset() 
@@ -274,7 +258,6 @@ if __name__ == "__main__":
         action = np.array([agent.act(observation) for agent in agents])
         # action_random = env2.action_space.sample()
         observation, reward, terminated, truncated, info = env1.step(action) 
-        # print(info)
         # observation_random, reward_random, terminated_random, truncated_random, info_random = env2.step(action_random)
         # observation_rotate, reward_rotate, terminated_rotate, truncated_rotate, info_rotate = env3.step(rotate_initial)
         env1.render()
@@ -283,7 +266,7 @@ if __name__ == "__main__":
         # episode_reward_random += reward_random
         # episode_reward_rotate += reward_rotate
 
-        # rotate_initial = np.roll(rotate_initial, 1)
+        rotate_initial = np.roll(rotate_initial, 1)
         if terminated or truncated:
             break
     
