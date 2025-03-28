@@ -20,7 +20,7 @@ pip install numpy matplotlib ipykernel
 
 2. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/swhong94/dca_env.git
 cd dca_env
 ```
 
