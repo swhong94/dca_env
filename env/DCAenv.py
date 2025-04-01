@@ -251,7 +251,7 @@ class CSMA_gym(CSMA_CA_Agent):
         return action[0]
 
 if __name__ == "__main__":
-    num_nodes = 5
+    num_nodes = 10
     max_steps = 1000
     env1 = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, render_mode='ansi')
     # env2 = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, render_mode='human')
