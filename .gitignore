@@ -5,6 +5,7 @@ __pycache__
 
 # ignore proto versions
 DCAenv_proto.py
+DCAenv_ma_v2.py
 
 # ignore shell scripts
 test_proto.sh

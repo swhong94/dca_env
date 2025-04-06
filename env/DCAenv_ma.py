@@ -92,16 +92,16 @@ class DCAEnv(gym.Env):
     Transmission lasts for multiple time slots, and success requires no interference from other nodes 
     "ACK" issued only when the full packet has fully arrived.
     """
-    metadata = {"render_modes": ["human", "ansi", "rgb_array"], "render_fps": 10}
+    metadata = {"render_modes": ["human", "ansi", "rgb_array"]}
     RENDER_SLOTS = 50 
     NOTEBOOK = 'ipykernel' in sys.modules 
     CHANNEL_STATE_MAPS = {"IDLE": 0, "OCCUPIED": 1, "COLLISION": 2, "ACK": 3}
 
     def __init__(self, 
-                 num_nodes=5, 
-                 max_steps=100, 
+                 num_agents=5, 
+                 max_cycles=1000, 
                  packet_length=3,
-                 render_mode=None,):
+                 render_mode=None):
         """ 
         Initialize the environment 
 
@@ -114,22 +114,20 @@ class DCAEnv(gym.Env):
         """
         super().__init__() 
 
-        self.num_nodes = num_nodes
-        self.max_steps = max_steps 
+        self.num_agents = num_agents
+        self.max_cycles = max_cycles 
         self.packet_length = packet_length
         self.render_mode = render_mode.lower() if render_mode else None 
         self.access_point = AccessPoint() 
         self.t = 0 
 
-        self.node_ids = [f"node_{i}" for i in range(num_nodes)] 
-        self.action_spaces = {node_id: gym.spaces.Discrete(2) for node_id in self.node_ids} 
+        self.agents = [f"agent_{i}" for i in range(num_agents)] 
+        self.action_spaces = {agent_id: gym.spaces.Discrete(2) for agent_id in self.agents} 
         self.observation_spaces = {
-            node_id: gym.spaces.Dict({"channel_state": gym.spaces.Discrete(4), 
+            agent_id: gym.spaces.Dict({"channel_state": gym.spaces.Discrete(4), 
                                        "collision": gym.spaces.Discrete(2)}) 
-            for node_id in self.node_ids 
+            for agent_id in self.agents 
         }
-
-        self.action_space = gym.spaces.MultiBinary(num_nodes)  # For compatibility 
 
         self.hidden_state = {
             "channel": "IDLE", 
@@ -165,11 +163,11 @@ class DCAEnv(gym.Env):
         self._initialize_render_data()  
 
         observation = self._get_observation() 
-        info = {"hidden_state": self.hidden_state.copy()}
+        infos = {agent_id: {"hidden_state": self.hidden_state.copy()} for agent_id in self.agents} 
 
-        return observation, info 
+        return observation, infos     
 
-    
+
     def step(self, actions): 
         """Execute one step with joint actions 
         
@@ -184,7 +182,7 @@ class DCAEnv(gym.Env):
             info (dict): additional information (e.g., hidden_state)
         """
 
-        action_array = np.array([actions[node_id] for node_id in self.node_ids])
+        action_array = np.array([actions[agent_id] for agent_id in self.agents])
 
         ready_nodes = np.where(action_array == 1)[0].tolist() 
 
@@ -208,16 +206,39 @@ class DCAEnv(gym.Env):
 
         observations = self._get_observation()  
         self.t += 1 
-        terminated = {node_id: False for node_id in self.node_ids}
-        truncated = {node_id: self.t >= self.max_steps for node_id in self.node_ids} 
+        terminations = {agent_id: False for agent_id in self.agents}
+        truncations = {agent_id: self.t >= self.max_cycles for agent_id in self.agents} 
 
         # update render data 
-        print("CHANNEL=",channel)
         self._update_render_data() 
 
-        info = {"hidden_state": self.hidden_state.copy()}
+        infos = {agent_id: {"hidden_state": self.hidden_state.copy()} for agent_id in self.agents}
 
-        return observations, rewards, terminated, truncated, info 
+        return observations, rewards, terminations, truncations, infos 
+
+
+    def render(self):
+        """Render th environment in accordance to the render_mode 
+        
+        Returns:
+            None 
+        """
+        if not self.render_mode: 
+            return 
+        
+        time_agent_data = self.render_data["time_agent"] 
+
+        if self.render_mode == "ansi": 
+            self._render_ansi(time_agent_data) 
+        elif self.render_mode in ["human", "rgb_array"]:
+            self._render_human(time_agent_data)
+
+
+    def observation_space(self, agent): 
+        return self.observation_spaces[agent]
+    
+    def action_space(self, agent): 
+        return self.action_spaces[agent]
 
 
     def _get_observation(self): 
@@ -234,78 +255,42 @@ class DCAEnv(gym.Env):
         ### TODO: personalize by agent (when including D2LT)### 
         observation = {"channel_state": channel_state,                          
                        "collision": collision}
-        return {node_id: observation.copy() for node_id in self.node_ids}    
+        return {agent_id: observation.copy() for agent_id in self.agents}    
     
-
     def _compute_rewards(self): 
         """Compute rewards based on state (observation + hidden_state)
         
         Returns: 
             rewards (dict): rewards per agent 
         """
-        rewards = {node_id: 0 for node_id in self.node_ids}
+        rewards = {agent_id: 0 for agent_id in self.agents}
         ready_nodes = self.hidden_state["ready_nodes"] 
         channel = self.hidden_state["channel"] 
         self.render_data["time_slot"] += 1 
         if channel == "ACK" and self.hidden_state["successful"]: 
             # For packet-based counts 
             self.render_data["success"] += 1 
-            self.render_data["node_success"][self.access_point.current_transmitter] += 1 
+            self.render_data["agent_success"][self.access_point.current_transmitter] += 1 
             # For bit-based counts 
             self.render_data["success_packet"] += self.packet_length 
-            self.render_data["node_success_packet"][self.access_point.current_transmitter] += self.packet_length 
-            rewards[self.node_ids[self.access_point.current_transmitter]] = 1.0
+            self.render_data["agent_success_packet"][self.access_point.current_transmitter] += self.packet_length 
+            rewards[self.agents[self.access_point.current_transmitter]] = 1.0
             
         elif channel == "COLLISION": 
             self.render_data["collision"] += 1 
             for node in ready_nodes: 
-                self.render_data["node_collision"][node] += 1 
-                rewards[self.node_ids[node]] = -1.0 
+                self.render_data["agent_collision"][node] += 1 
+                rewards[self.agents[node]] = -1.0 
                 
-        # elif channel == "BUSY": 
-        #     print(f"Remaining slots: {self.access_point.remaining_slots}")
-        #     if self.access_point.remaining_slots == 0 and self.hidden_state["successful"]:
-        #         self.render_data["success"] += (self.packet_length - 1)
-        #         self.render_data["node_success"][self.access_point.current_transmitter] += 1 
-        #         rewards[self.agent_ids[self.access_point.current_transmitter]] = 1.0  
-        #     elif self.access_point.remaining_slots > 0 and len(ready_nodes) > 0: 
-        #         self.render_data["collision"] += 1 
-        #         for node in ready_nodes: 
-        #             self.render_data["node_collision"][node] += 1 
-        #             rewards[self.agent_ids[node]] = -1.0  
-            
-        # elif channel == "BUSY" and self.access_point.remaining_slots == 0 and self.hidden_state["success"]:
-        #     self.render_data["success"] += 1 
-        #     self.render_data["node_success"][self.access_point.current_transmitter] += 1 
-        #     rewards[self.agent_ids[self.access_point.current_transmitter]] = 1.0  
-        
         return rewards 
-
-
-    def render(self):
-        """Render th environment in accordance to the render_mode 
-        
-        Returns:
-            None 
-        """
-        if not self.render_mode: 
-            return 
-        
-        time_node_data = self.render_data["time_node"] 
-
-        if self.render_mode == "ansi": 
-            self._render_ansi(time_node_data) 
-        elif self.render_mode in ["human", "rgb_array"]:
-            self._render_human(time_node_data)
-
 
     def _initialize_render_data(self): 
         """Initialize data for rendering """
         self.render_data = {
-            "time_node": np.zeros((self.num_nodes, self.RENDER_SLOTS)), 
-            "node_success": np.zeros((self.num_nodes, 1), dtype=int), 
-            "node_collision": np.zeros((self.num_nodes, 1), dtype=int), 
-            "node_success_packet": np.zeros((self.num_nodes, 1), dtype=int), 
+            "time_agent": np.zeros((self.num_agents, self.RENDER_SLOTS)), 
+            "agent_success": np.zeros((self.num_agents, 1), dtype=int), 
+            "agent_collision": np.zeros((self.num_agents, 1), dtype=int), 
+            "agent_success_packet": np.zeros((self.num_agents, 1), dtype=int), 
             "time_slot": 0,
             "success": 0, 
             "success_packet": 0, 
@@ -319,7 +304,7 @@ class DCAEnv(gym.Env):
 
     def _update_render_data(self): 
         """Update the render data based on the current state"""
-        self.state_data = np.zeros((self.num_nodes, 1))
+        self.state_data = np.zeros((self.num_agents, 1))
         ready_nodes = self.hidden_state["ready_nodes"] 
         channel = self.hidden_state["channel"] 
 
@@ -335,8 +320,8 @@ class DCAEnv(gym.Env):
             elif self.access_point.remaining_slots > 0 and len(ready_nodes) > 0: 
                 for node in ready_nodes: 
                     self.state_data[node] = 2 
-        self.render_data["time_node"] = np.concatenate(
-            (self.render_data["time_node"][:, 1:], self.state_data), axis=1
+        self.render_data["time_agent"] = np.concatenate(
+            (self.render_data["time_agent"][:, 1:], self.state_data), axis=1
         )
 
         if self.render_mode in ["human", "rgb_array"]: 
@@ -384,7 +369,7 @@ class DCAEnv(gym.Env):
         plt.grid(True)
 
         plt.subplot(324)
-        plt.bar(range(self.num_nodes), self.render_data['node_success_packet'].squeeze())
+        plt.bar(range(self.num_agents), self.render_data['agent_success_packet'].squeeze())
         plt.ylabel('Success Count')
 
         plt.subplot(313)
@@ -399,6 +384,7 @@ class DCAEnv(gym.Env):
             display.display(plt.gcf())
         else:
             plt.pause(0.001)
+
 
 
 
@@ -441,25 +427,25 @@ class CSMA_CA_Agent():
 
         
 if __name__ == "__main__":  
-    num_nodes = 5 
-    max_steps = 1000 
+    num_agents = 5 
+    num_cycles = 1000 
     packet_length = 10
     render_mode = "human"
-    env = DCAEnv(num_nodes=num_nodes, max_steps=max_steps, packet_length=packet_length, render_mode=render_mode) 
+    env = DCAEnv(num_agents=num_agents, max_cycles=num_cycles, packet_length=packet_length, render_mode=render_mode) 
 
-    legacy_agents = {f"node_{i}": CSMA_CA_Agent(i, cw_min=2, cw_max=32) for i in range(num_nodes)}
+    legacy_agents = {f"agent_{i}": CSMA_CA_Agent(i, cw_min=2, cw_max=32) for i in range(num_agents)}
 
     total_reward = 0 
 
     obs, _ = env.reset() 
-    rewards_per_node = {node_id: 0 for node_id in env.node_ids}
-    for i in range(max_steps): 
+    rewards_per_agent = {agent_id: 0 for agent_id in env.agents}
+    for i in range(num_cycles): 
         # actions = {agent_id: env.action_spaces[agent_id].sample() for agent_id in env.agent_ids}
-        actions = {node_id: legacy_agents[node_id].act(obs[node_id]) for node_id in env.node_ids}
+        actions = {agent_id: legacy_agents[agent_id].act(obs[agent_id]) for agent_id in env.agents}
         next_obs, rewards, terminated, truncated, info = env.step(actions) 
         env.render()
         total_reward += sum(rewards.values()) 
-        rewards_per_node = {node_id: rewards_per_node[node_id] + rewards[node_id] for node_id in env.node_ids}
+        rewards_per_agent = {agent_id: rewards_per_agent[agent_id] + rewards[agent_id] for agent_id in env.agents}
         obs = next_obs 
     
         if any(terminated.values()) or any(truncated.values()): 
@@ -468,6 +454,6 @@ if __name__ == "__main__":
     if not env.NOTEBOOK: 
         plt.show()
 
-    avg_rewards_per_node = {node_id: rewards_per_node[node_id] / max_steps for node_id in env.node_ids}
-    print(f"Avg rewards: {total_reward / max_steps}")
-    print(f"Avg rewards per node: {avg_rewards_per_node}")
+    avg_rewards_per_agent = {agent_id: rewards_per_agent[agent_id] / num_cycles for agent_id in env.agents}
+    print(f"Avg rewards: {total_reward / num_cycles}")
+    print(f"Avg rewards per agent: {avg_rewards_per_agent}")
